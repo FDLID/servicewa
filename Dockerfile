@@ -1,10 +1,21 @@
 FROM node:18-slim
 
-# Install Chrome for Puppeteer
+# Install only essential dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
-    unzip \
+    curl \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
     libx11-6 \
     libx11-xcb1 \
     libxcb1 \
@@ -13,42 +24,25 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxext6 \
     libxfixes3 \
-    libxi6 \
     libxrandr2 \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    libnss3 \
-    libnspr4 \
-    libdbus-1-3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libgbm1 \
-    libasound2 \
-    fonts-liberation \
-    && wget -q -O /usr/local/bin/chrome-headless-shell https://storage.googleapis.com/chrome-for-testing-public/116.0.5845.96/linux64/chrome-headless-shell-linux64.zip \
-    && unzip /usr/local/bin/chrome-headless-shell -d /usr/local/bin/ \
-    && rm /usr/local/bin/chrome-headless-shell.zip \
-    && apt-get clean \
+    xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Chrome path
-ENV CHROME_PATH=/usr/local/bin/chrome-headless-shell-linux64/chrome-headless-shell
+# Download and install Chrome
+RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    dpkg -i /tmp/chrome.deb || apt-get install -y -f && \
+    rm /tmp/chrome.deb
 
 WORKDIR /app
-
 COPY package*.json ./
-
 RUN npm install --production
-
 COPY . .
 
-# Create sessions directory
-RUN mkdir -p sessions && chmod 755 sessions
+ENV CHROME_PATH=/usr/bin/google-chrome-stable
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 EXPOSE 3001
-
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
