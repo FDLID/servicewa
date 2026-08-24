@@ -100,11 +100,35 @@ function createClient(restaurantId) {
         ]
     };
 
-    // Use Chrome from environment if set
-    const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH;
-    if (chromePath) {
-        puppeteerConfig.executablePath = chromePath;
-        console.log(`[${restaurantId}] Using Chrome at: ${chromePath}`);
+    // Find Chrome/Chromium executable
+    const chromePaths = [
+        process.env.PUPPETEER_EXECUTABLE_PATH,
+        process.env.CHROMIUM_PATH,
+        process.env.CHROME_PATH,
+        process.env.CHROME_BIN,
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable'
+    ];
+
+    for (const chromePath of chromePaths) {
+        if (chromePath) {
+            try {
+                if (fs.existsSync(chromePath)) {
+                    puppeteerConfig.executablePath = chromePath;
+                    console.log(`[${restaurantId}] Using browser at: ${chromePath}`);
+                    break;
+                }
+            } catch (e) {
+                // Continue to next path
+            }
+        }
+    }
+
+    // If no browser found, log warning
+    if (!puppeteerConfig.executablePath) {
+        console.log(`[${restaurantId}] No browser found, trying default...`);
     }
 
     const client = new Client({
