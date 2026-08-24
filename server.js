@@ -366,6 +366,11 @@ app.post('/send', async (req, res) => {
 
     console.log(`[${id}] Send request to: ${to}`);
 
+    // Validate required fields
+    if (!to || !message) {
+        return res.status(400).json({ success: false, message: 'Missing required fields: to and message' });
+    }
+
     try {
         const client = clients.get(id);
         if (!client || !client.info) {
