@@ -94,8 +94,10 @@ function createClient(restaurantId) {
     };
 
     // Use Chrome from environment if set (for Railway with Dockerfile)
-    if (process.env.CHROME_PATH) {
-        puppeteerConfig.executablePath = process.env.CHROME_PATH;
+    const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH;
+    if (chromePath) {
+        puppeteerConfig.executablePath = chromePath;
+        console.log(`Using Chrome at: ${chromePath}`);
     }
 
     const client = new Client({
