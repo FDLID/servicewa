@@ -1,6 +1,6 @@
 FROM node:18-slim
 
-# Install only essential dependencies
+# Install system dependencies for Chrome
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libxtst6 \
     xdg-utils \
+    xauth \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install Chrome
@@ -36,23 +37,34 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     dpkg -i /tmp/chrome.deb || apt-get install -y -f && \
     rm /tmp/chrome.deb
 
+# Verify Chrome installation
+RUN google-chrome --version || echo "Chrome verification failed"
+
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install npm packages (skip postinstall scripts)
+# Install dependencies
 RUN npm install --omit=dev --ignore-scripts
 
 # Copy application files
 COPY . .
 
-# Set Chrome path for puppeteer (we already have Chrome installed)
+# Create sessions directory with proper permissions
+RUN mkdir -p /app/sessions && chmod 777 /app/sessions
+
+# Environment variables for Chrome
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV CHROME_PATH=/usr/bin/google-chrome-stable
+ENV CHROME_BIN=/usr/bin/google-chrome-stable
 
 # Expose port
 EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:3001/health || exit 1
 
 CMD ["node", "server.js"]
