@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Session data (contains WhatsApp auth)
+sessions/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pm2-*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+dist/
+build/
