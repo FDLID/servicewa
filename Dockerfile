@@ -37,12 +37,22 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     rm /tmp/chrome.deb
 
 WORKDIR /app
+
+# Copy package files
 COPY package*.json ./
-RUN npm install --production
+
+# Install npm packages (skip postinstall scripts)
+RUN npm install --omit=dev --ignore-scripts
+
+# Copy application files
 COPY . .
 
-ENV CHROME_PATH=/usr/bin/google-chrome-stable
+# Set Chrome path for puppeteer (we already have Chrome installed)
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+ENV CHROME_PATH=/usr/bin/google-chrome-stable
 
+# Expose port
 EXPOSE 3001
+
 CMD ["node", "server.js"]
