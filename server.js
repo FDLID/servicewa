@@ -359,7 +359,7 @@ app.get('/status/:restaurantId', (req, res) => {
 
 /**
  * POST /send
- * Send WhatsApp message
+ * Send WhatsApp message with auto-reconnect
  */
 app.post('/send', async (req, res) => {
     const { restaurantId, to, message } = req.body;
@@ -372,36 +372,90 @@ app.post('/send', async (req, res) => {
         return res.status(400).json({ success: false, message: 'Missing required fields: to and message' });
     }
 
-    try {
-        const client = clients.get(id);
-        if (!client || !client.info) {
-            return res.status(400).json({ success: false, message: 'WhatsApp not connected. Please scan QR again.' });
+    const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
+
+    // Try to send with auto-reconnect
+    async function trySend(attempt = 1) {
+        try {
+            const client = clients.get(id);
+
+            // Check if client exists
+            if (!client) {
+                console.log(`[${id}] No client, creating new...`);
+                const newClient = createClient(id);
+                clients.set(id, newClient);
+
+                // Wait for client to be ready (max 30s)
+                for (let i = 0; i < 30; i++) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    const c = clients.get(id);
+                    if (c && c.info) {
+                        console.log(`[${id}] Client ready after ${i+1}s`);
+                        break;
+                    }
+                }
+            }
+
+            const currentClient = clients.get(id);
+            if (!currentClient || !currentClient.info) {
+                return { success: false, message: 'WhatsApp belum terhubung. Silakan scan QR.' };
+            }
+
+            console.log(`[${id}] Sending message (attempt ${attempt})...`);
+            await currentClient.sendMessage(formattedNumber, message);
+
+            return { success: true, message: 'Message sent' };
+
+        } catch (e) {
+            console.error(`[${id}] Send error (attempt ${attempt}):`, e.message);
+
+            // If first attempt failed, try to reconnect
+            if (attempt === 1) {
+                console.log(`[${id}] First attempt failed, trying to reconnect...`);
+
+                // Destroy old client
+                const oldClient = clients.get(id);
+                if (oldClient) {
+                    try { oldClient.destroy(); } catch (e) {}
+                }
+
+                // Clear session
+                clients.delete(id);
+                qrCodes.delete(id);
+                initState.delete(id);
+                initErrors.delete(id);
+
+                const sessionPath = path.join(SESSION_DIR, `session_${id}`);
+                if (fs.existsSync(sessionPath)) {
+                    fs.rmSync(sessionPath, { recursive: true, force: true });
+                    console.log(`[${id}] Session deleted for reconnect`);
+                }
+
+                // Try again
+                return trySend(2);
+            }
+
+            // Second attempt failed
+            let errorMsg = 'Gagal mengirim pesan.';
+
+            if (e.message.includes('timed out') || e.message.includes('timeout')) {
+                errorMsg = 'WhatsApp tidak merespons.\n\nKemungkinan sesi expired.\n\nSolusi: Klik "Putuskan" lalu scan QR baru.';
+            } else if (e.message.includes('not authorized') || e.message.includes('auth')) {
+                errorMsg = 'Sesi WhatsApp expired.\n\nSilakan scan QR baru.';
+            } else if (e.message.includes('Protocol error') || e.message.includes('Runtime')) {
+                errorMsg = 'Koneksi WhatsApp terputus.\n\nKlik "Putuskan" lalu scan QR baru.';
+            }
+
+            return { success: false, message: errorMsg };
         }
+    }
 
-        const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
+    const result = await trySend();
 
-        console.log(`[${id}] Sending message to ${formattedNumber}...`);
-
-        const result = await client.sendMessage(formattedNumber, message);
-
-        console.log(`[${id}] Message sent successfully`);
-        res.json({ success: true, message: 'Message sent' });
-
-    } catch (e) {
-        console.error(`[${id}] Send error:`, e.message);
-
-        // Return specific error message
-        let errorMsg = e.message || 'Unknown error';
-
-        if (errorMsg.includes('timed out') || errorMsg.includes('timeout')) {
-            errorMsg = 'WhatsApp tidak merespons. Pastikan телефона aktif dan terhubung ke internet.';
-        } else if (errorMsg.includes('not authorized') || errorMsg.includes('auth')) {
-            errorMsg = 'Sesi WhatsApp expired. Silakan scan QR baru.';
-        } else if (errorMsg.includes('Protocol error') || errorMsg.includes('Runtime')) {
-            errorMsg = 'Koneksi WhatsApp Web terputus. Silakan putuskan dan scan QR baru.';
-        }
-
-        res.status(500).json({ success: false, message: errorMsg });
+    if (result.success) {
+        res.json({ success: true, message: result.message });
+    } else {
+        res.status(500).json({ success: false, message: result.message });
     }
 });
 
