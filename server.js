@@ -71,6 +71,7 @@ function createClient(restaurantId) {
 
     const puppeteerConfig = {
         headless: true,
+        protocolTimeout: 60000, // Increase protocol timeout to 60s
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -380,7 +381,12 @@ app.post('/send', async (req, res) => {
         const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
 
         console.log(`[${id}] Sending message...`);
-        await client.sendMessage(formattedNumber, message);
+
+        // Add timeout to prevent hanging
+        const result = await Promise.race([
+            client.sendMessage(formattedNumber, message),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout after 30s')), 30000))
+        ]);
 
         console.log(`[${id}] Message sent to ${to}`);
         res.json({ success: true, message: 'Message sent' });
