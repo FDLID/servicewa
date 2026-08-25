@@ -1,6 +1,6 @@
 /**
- * WhatsApp Web Service v2.0 - Production
- * Optimized for Railway deployment
+ * WhatsApp Web Service v2.1 - Stable
+ * With keep-alive and smart reconnection
  */
 
 const express = require('express');
@@ -15,7 +15,8 @@ const app = express();
 // Configuration
 const PORT = process.env.PORT || 3001;
 const SESSION_DIR = path.join(__dirname, 'sessions');
-const QR_EXPIRY = 120000; // QR expires in 2 minutes
+const KEEP_ALIVE_INTERVAL = 45000; // Ping every 45 seconds
+const MAX_SEND_RETRIES = 3;
 
 // Ensure sessions directory exists
 if (!fs.existsSync(SESSION_DIR)) {
@@ -35,13 +36,13 @@ const clients = new Map();
 const qrCodes = new Map();
 const initState = new Map();
 const initErrors = new Map();
+const keepAliveIntervals = new Map();
 
 // Startup info
 console.log('============================================');
-console.log('  WhatsApp Web Service v2.0');
+console.log('  WhatsApp Web Service v2.1 - Stable');
 console.log(`  Port: ${PORT}`);
 console.log(`  Sessions Dir: ${SESSION_DIR}`);
-console.log(`  Chrome Path: ${process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH || 'auto'}`);
 console.log('============================================\n');
 
 /**
@@ -61,6 +62,41 @@ async function generateQRCode(text) {
 }
 
 /**
+ * Start keep-alive pinger for a client
+ */
+function startKeepAlive(restaurantId, client) {
+    // Clear existing interval
+    if (keepAliveIntervals.has(restaurantId)) {
+        clearInterval(keepAliveIntervals.get(restaurantId));
+    }
+
+    const interval = setInterval(async () => {
+        try {
+            if (client && client.info) {
+                // Send a ping to keep connection alive
+                const me = client.info.wid._serialized;
+                await client.sendMessage(me, 'ping', { waitForAck: false });
+                console.log(`[${restaurantId}] Keep-alive ping sent`);
+            }
+        } catch (e) {
+            console.log(`[${restaurantId}] Keep-alive failed:`, e.message);
+        }
+    }, KEEP_ALIVE_INTERVAL);
+
+    keepAliveIntervals.set(restaurantId, interval);
+}
+
+/**
+ * Stop keep-alive for a client
+ */
+function stopKeepAlive(restaurantId) {
+    if (keepAliveIntervals.has(restaurantId)) {
+        clearInterval(keepAliveIntervals.get(restaurantId));
+        keepAliveIntervals.delete(restaurantId);
+    }
+}
+
+/**
  * Create and initialize WhatsApp client for a restaurant
  */
 function createClient(restaurantId) {
@@ -71,7 +107,7 @@ function createClient(restaurantId) {
 
     const puppeteerConfig = {
         headless: true,
-        protocolTimeout: 60000, // Increase protocol timeout to 60s
+        protocolTimeout: 120000, // 2 minutes timeout
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -121,15 +157,8 @@ function createClient(restaurantId) {
                     console.log(`[${restaurantId}] Using browser at: ${chromePath}`);
                     break;
                 }
-            } catch (e) {
-                // Continue to next path
-            }
+            } catch (e) {}
         }
-    }
-
-    // If no browser found, log warning
-    if (!puppeteerConfig.executablePath) {
-        console.log(`[${restaurantId}] No browser found, trying default...`);
     }
 
     const client = new Client({
@@ -150,8 +179,6 @@ function createClient(restaurantId) {
                     timestamp: Date.now()
                 });
                 console.log(`[${restaurantId}] QR generated successfully`);
-            } else {
-                console.log(`[${restaurantId}] QR generation failed`);
             }
         } catch (e) {
             console.error(`[${restaurantId}] Failed to generate QR:`, e.message);
@@ -164,6 +191,7 @@ function createClient(restaurantId) {
         initState.set(restaurantId, { status: 'ready' });
         initErrors.delete(restaurantId);
         qrCodes.delete(restaurantId);
+        startKeepAlive(restaurantId, client);
     });
 
     // Authenticated
@@ -174,6 +202,7 @@ function createClient(restaurantId) {
     // Auth failure
     client.on('auth_failure', (msg) => {
         console.error(`[${restaurantId}] ❌ Auth failure:`, msg);
+        stopKeepAlive(restaurantId);
         initState.delete(restaurantId);
         initErrors.set(restaurantId, { type: 'auth_failure', message: msg });
         qrCodes.delete(restaurantId);
@@ -183,6 +212,7 @@ function createClient(restaurantId) {
     // Disconnected
     client.on('disconnected', (reason) => {
         console.log(`[${restaurantId}] Disconnected:`, reason);
+        stopKeepAlive(restaurantId);
         clients.delete(restaurantId);
         initState.delete(restaurantId);
         qrCodes.delete(restaurantId);
@@ -260,24 +290,21 @@ app.get('/qr/:restaurantId', async (req, res) => {
         // Check stored QR
         if (qrCodes.has(id)) {
             const stored = qrCodes.get(id);
-            if (Date.now() - stored.timestamp < QR_EXPIRY) {
-                return res.json({
-                    success: true,
-                    connected: false,
-                    qrcode: stored.qr,
-                    message: 'Scan QR with WhatsApp'
-                });
-            }
-            qrCodes.delete(id);
+            return res.json({
+                success: true,
+                connected: false,
+                qrcode: stored.qr,
+                message: 'Scan QR with WhatsApp'
+            });
         }
 
         // Create/get client
         getClient(id);
         initState.set(id, { status: 'initializing' });
 
-        // Wait for QR (max 60 seconds)
+        // Wait for QR (max 90 seconds)
         console.log(`[${id}] Waiting for QR...`);
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 90; i++) {
             await new Promise(r => setTimeout(r, 1000));
 
             // Check for errors
@@ -313,13 +340,12 @@ app.get('/qr/:restaurantId', async (req, res) => {
                 });
             }
 
-            // Log every 10 seconds
             if ((i + 1) % 10 === 0) {
                 console.log(`[${id}] Still waiting... ${i + 1}s`);
             }
         }
 
-        console.log(`[${id}] QR timeout after 60 seconds`);
+        console.log(`[${id}] QR timeout after 90 seconds`);
         res.json({
             success: true,
             connected: false,
@@ -359,7 +385,7 @@ app.get('/status/:restaurantId', (req, res) => {
 
 /**
  * POST /send
- * Send WhatsApp message with auto-reconnect
+ * Send WhatsApp message with retries
  */
 app.post('/send', async (req, res) => {
     const { restaurantId, to, message } = req.body;
@@ -374,79 +400,57 @@ app.post('/send', async (req, res) => {
 
     const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
 
-    // Try to send with auto-reconnect
+    // Try to send with retries
     async function trySend(attempt = 1) {
-        try {
-            const client = clients.get(id);
+        const client = clients.get(id);
 
-            // Check if client exists
-            if (!client) {
-                console.log(`[${id}] No client, creating new...`);
-                const newClient = createClient(id);
-                clients.set(id, newClient);
+        // Check if client exists and is ready
+        if (!client || !client.info) {
+            // Try to create new client
+            console.log(`[${id}] No client, creating new...`);
+            const newClient = createClient(id);
+            clients.set(id, newClient);
 
-                // Wait for client to be ready (max 30s)
-                for (let i = 0; i < 30; i++) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    const c = clients.get(id);
-                    if (c && c.info) {
-                        console.log(`[${id}] Client ready after ${i+1}s`);
-                        break;
-                    }
+            // Wait for client to be ready (max 60s)
+            for (let i = 0; i < 60; i++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const c = clients.get(id);
+                if (c && c.info) {
+                    console.log(`[${id}] Client ready after ${i+1}s`);
+                    break;
                 }
             }
+        }
 
-            const currentClient = clients.get(id);
-            if (!currentClient || !currentClient.info) {
-                return { success: false, message: 'WhatsApp belum terhubung. Silakan scan QR.' };
-            }
+        const currentClient = clients.get(id);
+        if (!currentClient || !currentClient.info) {
+            return { success: false, message: 'WhatsApp belum terhubung. Silakan scan QR.' };
+        }
 
-            console.log(`[${id}] Sending message (attempt ${attempt})...`);
+        try {
+            console.log(`[${id}] Sending message (attempt ${attempt}/${MAX_SEND_RETRIES})...`);
+
+            // Use sendReadReceipt to verify connection is alive
+            await currentClient.sendPresenceAvailable();
+
+            // Now send the actual message
             await currentClient.sendMessage(formattedNumber, message);
 
+            console.log(`[${id}] Message sent successfully`);
             return { success: true, message: 'Message sent' };
 
         } catch (e) {
             console.error(`[${id}] Send error (attempt ${attempt}):`, e.message);
 
-            // If first attempt failed, try to reconnect
-            if (attempt === 1) {
-                console.log(`[${id}] First attempt failed, trying to reconnect...`);
-
-                // Destroy old client
-                const oldClient = clients.get(id);
-                if (oldClient) {
-                    try { oldClient.destroy(); } catch (e) {}
-                }
-
-                // Clear session
-                clients.delete(id);
-                qrCodes.delete(id);
-                initState.delete(id);
-                initErrors.delete(id);
-
-                const sessionPath = path.join(SESSION_DIR, `session_${id}`);
-                if (fs.existsSync(sessionPath)) {
-                    fs.rmSync(sessionPath, { recursive: true, force: true });
-                    console.log(`[${id}] Session deleted for reconnect`);
-                }
-
-                // Try again
-                return trySend(2);
+            // If not last attempt, try again
+            if (attempt < MAX_SEND_RETRIES) {
+                console.log(`[${id}] Retrying in 2 seconds...`);
+                await new Promise(r => setTimeout(r, 2000));
+                return trySend(attempt + 1);
             }
 
-            // Second attempt failed
-            let errorMsg = 'Gagal mengirim pesan.';
-
-            if (e.message.includes('timed out') || e.message.includes('timeout')) {
-                errorMsg = 'WhatsApp tidak merespons.\n\nKemungkinan sesi expired.\n\nSolusi: Klik "Putuskan" lalu scan QR baru.';
-            } else if (e.message.includes('not authorized') || e.message.includes('auth')) {
-                errorMsg = 'Sesi WhatsApp expired.\n\nSilakan scan QR baru.';
-            } else if (e.message.includes('Protocol error') || e.message.includes('Runtime')) {
-                errorMsg = 'Koneksi WhatsApp terputus.\n\nKlik "Putuskan" lalu scan QR baru.';
-            }
-
-            return { success: false, message: errorMsg };
+            // All retries failed
+            return { success: false, message: 'Gagal mengirim pesan. Coba beberapa saat lagi.' };
         }
     }
 
@@ -472,6 +476,7 @@ app.post('/disconnect/:restaurantId', (req, res) => {
     try {
         const client = clients.get(id);
         if (client) {
+            stopKeepAlive(id);
             client.destroy();
             clients.delete(id);
             qrCodes.delete(id);
@@ -479,11 +484,11 @@ app.post('/disconnect/:restaurantId', (req, res) => {
             initErrors.delete(id);
         }
 
-        // Delete session folder to force new QR
+        // Delete session folder
         const sessionPath = path.join(SESSION_DIR, `session_${id}`);
         if (fs.existsSync(sessionPath)) {
             fs.rmSync(sessionPath, { recursive: true, force: true });
-            console.log(`[${id}] Session folder deleted: ${sessionPath}`);
+            console.log(`[${id}] Session folder deleted`);
         }
 
         res.json({ success: true, message: 'Disconnected', needNewQr: true });
@@ -513,7 +518,12 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
     res.json({
         name: 'WhatsApp Web Service',
-        version: '2.0',
+        version: '2.1 - Stable',
+        features: [
+            'Keep-alive pinger every 45s',
+            'Auto retry on send failure (3 attempts)',
+            'Smart session management'
+        ],
         endpoints: [
             'GET /health - Health check',
             'GET /qr/:restaurantId - Get QR code',
