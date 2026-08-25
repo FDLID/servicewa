@@ -380,21 +380,28 @@ app.post('/send', async (req, res) => {
 
         const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
 
-        console.log(`[${id}] Sending message...`);
+        console.log(`[${id}] Sending message to ${formattedNumber}...`);
 
-        // Add timeout to prevent hanging
-        const result = await Promise.race([
-            client.sendMessage(formattedNumber, message),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout after 30s')), 30000))
-        ]);
+        const result = await client.sendMessage(formattedNumber, message);
 
-        console.log(`[${id}] Message sent to ${to}`);
+        console.log(`[${id}] Message sent successfully`);
         res.json({ success: true, message: 'Message sent' });
 
     } catch (e) {
         console.error(`[${id}] Send error:`, e.message);
 
-        res.status(500).json({ success: false, message: e.message });
+        // Return specific error message
+        let errorMsg = e.message || 'Unknown error';
+
+        if (errorMsg.includes('timed out') || errorMsg.includes('timeout')) {
+            errorMsg = 'WhatsApp tidak merespons. Pastikan телефона aktif dan terhubung ke internet.';
+        } else if (errorMsg.includes('not authorized') || errorMsg.includes('auth')) {
+            errorMsg = 'Sesi WhatsApp expired. Silakan scan QR baru.';
+        } else if (errorMsg.includes('Protocol error') || errorMsg.includes('Runtime')) {
+            errorMsg = 'Koneksi WhatsApp Web terputus. Silakan putuskan dan scan QR baru.';
+        }
+
+        res.status(500).json({ success: false, message: errorMsg });
     }
 });
 
