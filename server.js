@@ -379,29 +379,14 @@ app.post('/send', async (req, res) => {
 
         const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
 
-        // Set a timeout for sending
-        const sendPromise = client.sendMessage(formattedNumber, message);
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('timeout')), 30000);
-        });
-
-        const result = await Promise.race([sendPromise, timeoutPromise]);
+        console.log(`[${id}] Sending message...`);
+        await client.sendMessage(formattedNumber, message);
 
         console.log(`[${id}] Message sent to ${to}`);
         res.json({ success: true, message: 'Message sent' });
 
     } catch (e) {
         console.error(`[${id}] Send error:`, e.message);
-
-        // If timeout, session might be stale
-        if (e.message === 'timeout' || e.message.includes('timed out')) {
-            console.log(`[${id}] Send timeout - WhatsApp may be disconnected`);
-
-            return res.status(503).json({
-                success: false,
-                message: 'WhatsApp tidak merespons. Pastikan телефона terhubung ke WhatsApp Web, atau klik "Putuskan" untuk scan QR baru.'
-            });
-        }
 
         res.status(500).json({ success: false, message: e.message });
     }
