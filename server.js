@@ -410,7 +410,7 @@ app.post('/disconnect/:restaurantId', (req, res) => {
         }
 
         // Delete session folder to force new QR
-        const sessionPath = path.join(SESSIONS_DIR, `session_${id}`);
+        const sessionPath = path.join(SESSION_DIR, `session_${id}`);
         if (fs.existsSync(sessionPath)) {
             fs.rmSync(sessionPath, { recursive: true, force: true });
             console.log(`[${id}] Session folder deleted: ${sessionPath}`);
