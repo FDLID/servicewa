@@ -395,13 +395,11 @@ app.post('/send', async (req, res) => {
 
         // If timeout, session might be stale
         if (e.message === 'timeout' || e.message.includes('timed out')) {
-            console.log(`[${id}] Send timeout detected`);
+            console.log(`[${id}] Send timeout - WhatsApp may be disconnected`);
 
-            // Return error message but don't auto-reset - let user decide
             return res.status(503).json({
                 success: false,
-                message: 'WhatsApp tidak merespons. Coba lagi atau putuskan koneksi jika terus gagal.',
-                sessionExpired: true
+                message: 'WhatsApp tidak merespons. Pastikan телефона terhubung ke WhatsApp Web, atau klik "Putuskan" untuk scan QR baru.'
             });
         }
 
