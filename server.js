@@ -357,6 +357,54 @@ app.get('/status/:restaurantId', (req, res) => {
 });
 
 /**
+ * GET /ping/:restaurantId
+ * Ping WhatsApp connection - actually tests if we can send
+ */
+app.get('/ping/:restaurantId', async (req, res) => {
+    const { restaurantId } = req.params;
+    const id = parseInt(restaurantId) || 1;
+
+    const client = clients.get(id);
+    if (!client || !client.info) {
+        return res.json({
+            success: false,
+            connected: false,
+            message: 'WhatsApp not connected'
+        });
+    }
+
+    try {
+        // Try to send a ping message to self
+        const formattedNumber = client.info.wid._serialized;
+        await Promise.race([
+            client.sendMessage(formattedNumber, 'ping'),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))
+        ]);
+
+        res.json({
+            success: true,
+            connected: true,
+            message: 'WhatsApp is responsive'
+        });
+    } catch (e) {
+        console.log(`[${id}] Ping failed:`, e.message);
+
+        // Clear stale client
+        try { client.destroy(); } catch (e) {}
+        clients.delete(id);
+        qrCodes.delete(id);
+        initState.delete(id);
+
+        res.json({
+            success: false,
+            connected: false,
+            sessionExpired: true,
+            message: 'WhatsApp session expired'
+        });
+    }
+});
+
+/**
  * POST /send
  * Send WhatsApp message
  */
@@ -374,17 +422,52 @@ app.post('/send', async (req, res) => {
     try {
         const client = clients.get(id);
         if (!client || !client.info) {
-            return res.status(400).json({ success: false, message: 'WhatsApp not connected' });
+            return res.status(400).json({ success: false, message: 'WhatsApp not connected. Please scan QR again.' });
         }
 
         const formattedNumber = to.includes('@c.us') ? to : `${to}@c.us`;
-        await client.sendMessage(formattedNumber, message);
+
+        // Set a timeout for sending
+        const sendPromise = client.sendMessage(formattedNumber, message);
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('timeout')), 30000);
+        });
+
+        const result = await Promise.race([sendPromise, timeoutPromise]);
 
         console.log(`[${id}] Message sent to ${to}`);
         res.json({ success: true, message: 'Message sent' });
 
     } catch (e) {
         console.error(`[${id}] Send error:`, e.message);
+
+        // If timeout, session is likely stale - auto reset
+        if (e.message === 'timeout' || e.message.includes('timed out')) {
+            console.log(`[${id}] Session timeout detected, clearing client...`);
+
+            // Destroy and clear the stale client
+            const client = clients.get(id);
+            if (client) {
+                try { client.destroy(); } catch (e) {}
+                clients.delete(id);
+                qrCodes.delete(id);
+                initState.delete(id);
+                initErrors.delete(id);
+            }
+
+            // Delete session folder
+            const sessionPath = path.join(SESSION_DIR, `session_${id}`);
+            if (fs.existsSync(sessionPath)) {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+            }
+
+            return res.status(503).json({
+                success: false,
+                message: 'Sesi WhatsApp expired. Silakan klik "Putuskan" lalu scan QR baru.',
+                sessionExpired: true
+            });
+        }
+
         res.status(500).json({ success: false, message: e.message });
     }
 });
