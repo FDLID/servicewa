@@ -409,7 +409,14 @@ app.post('/disconnect/:restaurantId', (req, res) => {
             initErrors.delete(id);
         }
 
-        res.json({ success: true, message: 'Disconnected' });
+        // Delete session folder to force new QR
+        const sessionPath = path.join(SESSIONS_DIR, `session_${id}`);
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log(`[${id}] Session folder deleted: ${sessionPath}`);
+        }
+
+        res.json({ success: true, message: 'Disconnected', needNewQr: true });
 
     } catch (e) {
         console.error(`[${id}] Disconnect error:`, e.message);
